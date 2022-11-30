@@ -1,15 +1,12 @@
-// Copyright 2019 Manna Harbour
-// https://github.com/manna-harbour/miryoku
-
-// This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 2 of the License, or (at your option) any later version. This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details. You should have received a copy of the GNU General Public License along with this program. If not, see <http://www.gnu.org/licenses/>.
-
 #include QMK_KEYBOARD_H
 #include <stdio.h>
+#include "../../../../users/manna-harbour_miryoku/manna-harbour_miryoku.h"
 
-static uint16_t key_timer; // timer to track the last keyboard activity
-static void refresh_rgb(void); // refreshes the activity timer and RGB, invoke whenever activity happens
-static void check_rgb_timeout(void); // checks if enough time has passed for RGB to timeout
-bool is_rgb_timeout = false; // store if RGB has timed out or not in a boolean
+#ifdef RGBLIGHT_ENABLE
+static uint16_t idle_timer = 0;
+static uint8_t halfmin_counter = 0;
+static bool led_on = true;
+#endif
 
 #ifdef OLED_ENABLE
 oled_rotation_t oled_init_user(oled_rotation_t rotation) {
@@ -19,48 +16,48 @@ oled_rotation_t oled_init_user(oled_rotation_t rotation) {
   return rotation;
 }
 
-#define L_BASE 0
-#define L_NUM 7
-#define L_LOWER 2
-#define L_RAISE 4
-#define L_ADJUST 8
-
 void oled_render_layer_state(void) {
     oled_write_P(PSTR("Layer: "), false);
 
     switch (get_highest_layer(layer_state)) {
-        case 0:
-            oled_write_P(PSTR("Base\n"), false);
-            break;
-        case 1:
-            oled_write_P(PSTR("Extra\n"), false);
-            break;
-        case 2:
-            oled_write_P(PSTR("Tap\n"), false);
-            break;
-        case 3:
+        case U_BASE:
+            // These change the default layer so we need to check which one is active
+            switch (biton32(default_layer_state)) {
+                case U_BASE:
+                    oled_write_P(PSTR("Base\n"), false);
+                    break;
+                case U_EXTRA:
+                    oled_write_P(PSTR("Extra\n"), false);
+                    break;
+                case U_TAP:
+                    oled_write_P(PSTR("Tap\n"), false);
+                    break;
+                default:
+                    oled_write_P(PSTR("Undefined\n"), false);
+            }
+        case U_BUTTON:
             oled_write_P(PSTR("Button\n"), false);
             break;
-        case 4:
+        case U_NAV:
             oled_write_P(PSTR("Navigation\n"), false);
             break;
-        case 5:
+        case U_MOUSE:
             oled_write_P(PSTR("Mouse\n"), false);
             break;
-        case 6:
+        case U_MEDIA:
             oled_write_P(PSTR("Media\n"), false);
             break;
-        case 7:
+        case U_NUM:
             oled_write_P(PSTR("Number\n"), false);
             break;
-        case 8:
+        case U_SYM:
             oled_write_P(PSTR("Symbols\n"), false);
             break;
-        case 9:
+        case U_FUN:
             oled_write_P(PSTR("Function\n"), false);
             break;
         default:
-            oled_write_ln_P(PSTR("Undefined"), false);
+            oled_write_P(PSTR("Undefined\n"), false);
     }
 }
 
@@ -126,54 +123,39 @@ bool oled_task_user(void) {
     }
     return false;
 }
-
-bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-  if (record->event.pressed) {
-    set_keylog(keycode, record);
-  }
-  return true;
-}
 #endif // OLED_ENABLE
 
-// [Post Init]
-void keyboard_post_init_user(void) {
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    if (record->event.pressed) {
+        #ifdef OLED_ENABLE
+        set_keylog(keycode, record);
+        #endif
+
+        #ifdef RGBLIGHT_ENABLE
+        if (led_on == false) {
+            rgblight_wakeup();
+            led_on = true;
+        }
+        idle_timer = timer_read();
+        halfmin_counter = 0;
+        #endif
+    }
+    return true;
 }
 
-void refresh_rgb() {
-  key_timer = timer_read(); // store time of last refresh
-  if (is_rgb_timeout) { // only do something if rgb has timed out
-    is_rgb_timeout = false;
-    rgblight_wakeup();
-  }
-}
+void matrix_scan_user(void) {
+    #ifdef RGBLIGHT_ENABLE
+    if (idle_timer == 0) idle_timer = timer_read();
 
-void check_rgb_timeout() {
-  if (!is_rgb_timeout && timer_elapsed(key_timer) > RGBLIGHT_TIMEOUT) {
-    rgblight_suspend();
-    is_rgb_timeout = true;
-  }
-}
+    if ( led_on && timer_elapsed(idle_timer) > 30000) {
+        halfmin_counter++;
+        idle_timer = timer_read();
+    }
 
-/* Runs at the end of each scan loop, check if RGB timeout has occured */
-void housekeeping_task_user(void) {
-  #ifdef RGBLIGHT_TIMEOUT
-  check_rgb_timeout();
-  #endif
-  
-}
-
-/* Runs after each key press, check if activity occurred */
-void post_process_record_user(uint16_t keycode, keyrecord_t *record) {
-  #ifdef RGBLIGHT_TIMEOUT
-  if (record->event.pressed) refresh_rgb();
-  #endif
-
-}
-
-/* Runs after each encoder tick, check if activity occurred */
-void post_encoder_update_user(uint8_t index, bool clockwise) {
-  #ifdef RGBLIGHT_TIMEOUT
-  refresh_rgb();
-  #endif
-  
+    if ( led_on && halfmin_counter >= RGBLIGHT_TIMEOUT * 2) {
+        rgblight_suspend();
+        led_on = false;
+        halfmin_counter = 0;
+    }
+    #endif // RGBLIGHT_ENABLE
 }
